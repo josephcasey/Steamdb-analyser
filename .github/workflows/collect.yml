@@ -25,6 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Re-runs check out the triggering SHA, which may be behind the branch
+      # tip after later scheduled runs. Move to the latest commit so the push
+      # fast-forwards and we build the dashboard from the freshest data.
+      - name: Sync to latest remote
+        run: |
+          git fetch origin "${GITHUB_REF_NAME}"
+          git reset --hard "origin/${GITHUB_REF_NAME}"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -37,18 +45,8 @@ jobs:
         env:
           DISPLAY_TZ: Europe/London
 
-      - name: Commit data point
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/civ7_players.csv dashboard.html
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "data: civ7 player count $(date -u +%Y-%m-%dT%H:%MZ)"
-            git push
-          fi
-
+      # Publish first, so a transient git push failure can't block the site
+      # update. The freshly built dashboard.html is in the working tree.
       - name: Assemble Pages site
         run: |
           mkdir -p _site
@@ -65,3 +63,25 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Commit data point
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/civ7_players.csv dashboard.html
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "data: civ7 player count $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4 5; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "Push rejected; syncing and retrying ($i)..."
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort
+            sleep $((2 ** i))
+          done
+          echo "Push failed after retries." >&2
+          exit 1
