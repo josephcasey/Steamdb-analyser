@@ -6,8 +6,11 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch: {}  # allow manual runs
 
+# contents: commit the data point back; pages/id-token: publish the dashboard.
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: civ7-collect
@@ -16,6 +19,9 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,3 +48,20 @@ jobs:
             git commit -m "data: civ7 player count $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p _site
+          cp dashboard.html _site/index.html
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
