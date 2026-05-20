@@ -2,8 +2,8 @@ name: Collect Civ 7 player count
 
 on:
   schedule:
-    # Hourly, on the hour (UTC). GitHub may delay scheduled runs under load.
-    - cron: "0 * * * *"
+    # Every 30 minutes (UTC). GitHub may delay scheduled runs under load.
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}  # allow manual runs
 
 permissions:
