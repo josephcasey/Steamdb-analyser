@@ -6,11 +6,8 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch: {}  # allow manual runs
 
-# contents: commit the data point back; pages/id-token: publish the dashboard.
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: civ7-collect
@@ -19,9 +16,6 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,28 +39,14 @@ jobs:
         env:
           DISPLAY_TZ: Europe/London
 
-      # Publish first, so a transient git push failure can't block the site
-      # update. The freshly built dashboard.html is in the working tree.
-      - name: Assemble Pages site
-        run: |
-          mkdir -p _site
-          cp dashboard.html _site/index.html
-
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
+      # GitHub Pages (Deploy from a branch) serves index.html directly and
+      # rebuilds on every push, so committing the data + dashboard is all we
+      # need to refresh the live site.
       - name: Commit data point
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/civ7_players.csv dashboard.html
+          git add data/civ7_players.csv index.html
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0

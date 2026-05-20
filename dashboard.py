@@ -19,7 +19,7 @@ from statistics import mean
 from zoneinfo import ZoneInfo
 
 CSV_PATH = Path(os.environ.get("CIV7_CSV", "data/civ7_players.csv"))
-OUT_PATH = Path(os.environ.get("CIV7_DASHBOARD", "dashboard.html"))
+OUT_PATH = Path(os.environ.get("CIV7_DASHBOARD", "index.html"))
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "UTC")
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
