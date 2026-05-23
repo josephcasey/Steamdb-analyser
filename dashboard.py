@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build a self-contained HTML dashboard from the collected Civ 7 player-count CSV.
 
-Renders three views: a time-series line chart, a day-of-week x hour-of-day
-heatmap ("weekly hotspots"), and summary statistics. Uses only the standard
-library; charts are drawn client-side with Plotly loaded from a CDN.
+Renders three views: a time-series line chart (with Civ 6 overlay if present),
+a day-of-week x hour-of-day heatmap ("weekly hotspots"), and summary statistics.
+Uses only the standard library; charts are drawn client-side with Plotly loaded
+from a CDN.
 
 Set DISPLAY_TZ (an IANA name like "Europe/London" or "America/New_York") to
 bucket the heatmap/hours in local time. Defaults to UTC.
@@ -18,18 +19,19 @@ from pathlib import Path
 from statistics import mean
 from zoneinfo import ZoneInfo
 
-CSV_PATH = Path(os.environ.get("CIV7_CSV", "data/civ7_players.csv"))
+CIV7_CSV = Path(os.environ.get("CIV7_CSV", "data/civ7_players.csv"))
+CIV6_CSV = Path(os.environ.get("CIV6_CSV", "data/civ6_players.csv"))
 OUT_PATH = Path(os.environ.get("CIV7_DASHBOARD", "index.html"))
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "UTC")
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def load_rows():
-    if not CSV_PATH.exists():
+def load_rows(path: Path):
+    if not path.exists():
         return []
     rows = []
-    with CSV_PATH.open(newline="") as f:
+    with path.open(newline="") as f:
         for row in csv.DictReader(f):
             try:
                 ts = datetime.fromisoformat(row["timestamp_utc"])
@@ -43,28 +45,35 @@ def load_rows():
     return rows
 
 
-def build_payload(rows):
-    tz = ZoneInfo(DISPLAY_TZ)
-    local = [(ts.astimezone(tz), c) for ts, c in rows]
+def to_local(rows, tz):
+    return [(ts.astimezone(tz), c) for ts, c in rows]
 
-    series = {
+
+def series_payload(local):
+    return {
         "x": [ts.isoformat() for ts, _ in local],
         "y": [c for _, c in local],
     }
 
-    # Heatmap: average player count per (weekday, hour) bucket.
+
+def build_payload(civ7, civ6):
+    tz = ZoneInfo(DISPLAY_TZ)
+    civ7_local = to_local(civ7, tz)
+    civ6_local = to_local(civ6, tz)
+
+    # Heatmap and stats are Civ 7 only.
     buckets: dict[tuple[int, int], list[int]] = {}
-    for ts, c in local:
+    for ts, c in civ7_local:
         buckets.setdefault((ts.weekday(), ts.hour), []).append(c)
     z = [[None] * 24 for _ in range(7)]
     for (wd, hr), vals in buckets.items():
         z[wd][hr] = round(mean(vals))
 
-    stats = compute_stats(local)
     return {
-        "series": series,
+        "civ7": series_payload(civ7_local),
+        "civ6": series_payload(civ6_local),
         "heatmap": {"z": z, "weekdays": WEEKDAYS, "hours": list(range(24))},
-        "stats": stats,
+        "stats": compute_stats(civ7_local),
         "tz": DISPLAY_TZ,
         "generated": datetime.now(tz).replace(microsecond=0).isoformat(),
     }
@@ -138,7 +147,10 @@ const DATA = {data_json};
 const layoutBase = {{
   paper_bgcolor: '#0f1419', plot_bgcolor: '#0f1419',
   font: {{ color: '#e6e6e6' }}, margin: {{ t: 40, r: 20, b: 50, l: 60 }},
+  dragmode: false,
 }};
+const noZoomConfig = {{ responsive: true, displayModeBar: false, scrollZoom: false, doubleClick: false }};
+const fixedAxis = {{ fixedrange: true }};
 
 function fmt(n) {{ return n == null ? '—' : n.toLocaleString(); }}
 function when(iso) {{ return iso ? iso.replace('T', ' ').slice(0, 16) : '—'; }}
@@ -165,15 +177,24 @@ if (!s.samples) {{
     `<div class="value">${{c.value}}</div>` +
     `<div class="sub">${{c.sub || ''}}</div></div>`).join('');
 
-  Plotly.newPlot('timeseries', [{{
-    x: DATA.series.x, y: DATA.series.y, type: 'scatter', mode: 'lines',
+  const traces = [{{
+    x: DATA.civ7.x, y: DATA.civ7.y, type: 'scatter', mode: 'lines',
     line: {{ color: '#4da3ff', width: 2 }}, fill: 'tozeroy',
-    fillcolor: 'rgba(77,163,255,0.12)', name: 'Players',
-  }}], Object.assign({{}}, layoutBase, {{
+    fillcolor: 'rgba(77,163,255,0.12)', name: 'Civ VII',
+  }}];
+  if (DATA.civ6.x.length) {{
+    traces.push({{
+      x: DATA.civ6.x, y: DATA.civ6.y, type: 'scatter', mode: 'lines',
+      line: {{ color: '#ff9f4d', width: 2, dash: 'solid' }}, name: 'Civ VI',
+    }});
+  }}
+  Plotly.newPlot('timeseries', traces, Object.assign({{}}, layoutBase, {{
     title: 'Players over time',
-    xaxis: {{ gridcolor: '#222', title: '' }},
-    yaxis: {{ gridcolor: '#222', title: 'Players in game', rangemode: 'tozero' }},
-  }}), {{ responsive: true, displayModeBar: false }});
+    xaxis: Object.assign({{ gridcolor: '#222', title: '' }}, fixedAxis),
+    yaxis: Object.assign({{ gridcolor: '#222', title: 'Players in game', rangemode: 'tozero' }}, fixedAxis),
+    showlegend: true,
+    legend: {{ orientation: 'h', y: 1.08, x: 0 }},
+  }}), noZoomConfig);
 
   Plotly.newPlot('heatmap', [{{
     z: DATA.heatmap.z, x: DATA.heatmap.hours, y: DATA.heatmap.weekdays,
@@ -181,10 +202,10 @@ if (!s.samples) {{
     colorbar: {{ title: 'Avg players' }},
     hovertemplate: '%{{y}} %{{x}}:00<br>avg %{{z:,}} players<extra></extra>',
   }}], Object.assign({{}}, layoutBase, {{
-    title: 'Weekly hotspots (average by day &amp; hour)',
-    xaxis: {{ title: 'Hour of day', dtick: 2, gridcolor: '#222' }},
-    yaxis: {{ title: '', autorange: 'reversed' }},
-  }}), {{ responsive: true, displayModeBar: false }});
+    title: 'Weekly hotspots (Civ VII, average by day &amp; hour)',
+    xaxis: Object.assign({{ title: 'Hour of day', dtick: 2, gridcolor: '#222' }}, fixedAxis),
+    yaxis: Object.assign({{ title: '', autorange: 'reversed' }}, fixedAxis),
+  }}), noZoomConfig);
 }}
 </script>
 </body>
@@ -193,10 +214,11 @@ if (!s.samples) {{
 
 
 def main() -> int:
-    rows = load_rows()
-    payload = build_payload(rows)
+    civ7 = load_rows(CIV7_CSV)
+    civ6 = load_rows(CIV6_CSV)
+    payload = build_payload(civ7, civ6)
     OUT_PATH.write_text(render_html(payload), encoding="utf-8")
-    print(f"Wrote {OUT_PATH} from {len(rows)} rows (tz={DISPLAY_TZ})")
+    print(f"Wrote {OUT_PATH} from civ7={len(civ7)} civ6={len(civ6)} rows (tz={DISPLAY_TZ})")
     return 0
 
 

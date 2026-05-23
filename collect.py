@@ -14,8 +14,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-APPID = os.environ.get("CIV7_APPID", "1295660")  # Sid Meier's Civilization VII
-CSV_PATH = Path(os.environ.get("CIV7_CSV", "data/civ7_players.csv"))
+APPID = os.environ.get("STEAM_APPID", "1295660")  # Sid Meier's Civilization VII
+CSV_PATH = Path(os.environ.get("STEAM_CSV", "data/civ7_players.csv"))
 API_URL = (
     "https://api.steampowered.com/ISteamUserStats/"
     f"GetNumberOfCurrentPlayers/v1/?appid={APPID}"
