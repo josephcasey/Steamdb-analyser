@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo
 
 CIV7_CSV = Path(os.environ.get("CIV7_CSV", "data/civ7_players.csv"))
 CIV6_CSV = Path(os.environ.get("CIV6_CSV", "data/civ6_players.csv"))
+CIV7_HISTORY_CSV = Path(os.environ.get("CIV7_HISTORY_CSV", "data/civ7_history.csv"))
+CIV6_HISTORY_CSV = Path(os.environ.get("CIV6_HISTORY_CSV", "data/civ6_history.csv"))
 OUT_PATH = Path(os.environ.get("CIV7_DASHBOARD", "index.html"))
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "UTC")
 
@@ -56,12 +58,21 @@ def series_payload(local):
     }
 
 
-def build_payload(civ7, civ6):
-    tz = ZoneInfo(DISPLAY_TZ)
-    civ7_local = to_local(civ7, tz)
-    civ6_local = to_local(civ6, tz)
+def merge(history, live):
+    # History from SteamCharts (older end is monthly-aggregated); live from
+    # our 30-min collector. Prefer live whenever its samples overlap history.
+    if not live:
+        return history
+    cutoff = live[0][0]
+    return [r for r in history if r[0] < cutoff] + live
 
-    # Heatmap and stats are Civ 7 only.
+
+def build_payload(civ7_live, civ6_live, civ7_hist, civ6_hist):
+    tz = ZoneInfo(DISPLAY_TZ)
+    civ7_series = sorted(merge(civ7_hist, civ7_live), key=lambda r: r[0])
+    civ6_series = sorted(merge(civ6_hist, civ6_live), key=lambda r: r[0])
+    civ7_local = to_local(civ7_live, tz)  # heatmap + stats: live only
+
     buckets: dict[tuple[int, int], list[int]] = {}
     for ts, c in civ7_local:
         buckets.setdefault((ts.weekday(), ts.hour), []).append(c)
@@ -70,8 +81,8 @@ def build_payload(civ7, civ6):
         z[wd][hr] = round(mean(vals))
 
     return {
-        "civ7": series_payload(civ7_local),
-        "civ6": series_payload(civ6_local),
+        "civ7": series_payload(to_local(civ7_series, tz)),
+        "civ6": series_payload(to_local(civ6_series, tz)),
         "heatmap": {"z": z, "weekdays": WEEKDAYS, "hours": list(range(24))},
         "stats": compute_stats(civ7_local),
         "tz": DISPLAY_TZ,
@@ -214,11 +225,16 @@ if (!s.samples) {{
 
 
 def main() -> int:
-    civ7 = load_rows(CIV7_CSV)
-    civ6 = load_rows(CIV6_CSV)
-    payload = build_payload(civ7, civ6)
+    civ7_live = load_rows(CIV7_CSV)
+    civ6_live = load_rows(CIV6_CSV)
+    civ7_hist = load_rows(CIV7_HISTORY_CSV)
+    civ6_hist = load_rows(CIV6_HISTORY_CSV)
+    payload = build_payload(civ7_live, civ6_live, civ7_hist, civ6_hist)
     OUT_PATH.write_text(render_html(payload), encoding="utf-8")
-    print(f"Wrote {OUT_PATH} from civ7={len(civ7)} civ6={len(civ6)} rows (tz={DISPLAY_TZ})")
+    print(
+        f"Wrote {OUT_PATH} from civ7={len(civ7_live)}+hist {len(civ7_hist)} "
+        f"civ6={len(civ6_live)}+hist {len(civ6_hist)} rows (tz={DISPLAY_TZ})"
+    )
     return 0
 
 
