@@ -25,6 +25,7 @@ CIV7_HISTORY_CSV = Path(os.environ.get("CIV7_HISTORY_CSV", "data/civ7_history.cs
 CIV6_HISTORY_CSV = Path(os.environ.get("CIV6_HISTORY_CSV", "data/civ6_history.csv"))
 OUT_PATH = Path(os.environ.get("CIV7_DASHBOARD", "index.html"))
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "UTC")
+START_DATE = datetime.fromisoformat(os.environ.get("START_DATE", "2025-01-01")).replace(tzinfo=timezone.utc)
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -67,23 +68,28 @@ def merge(history, live):
     return [r for r in history if r[0] < cutoff] + live
 
 
-def build_payload(civ7_live, civ6_live, civ7_hist, civ6_hist):
-    tz = ZoneInfo(DISPLAY_TZ)
-    civ7_series = sorted(merge(civ7_hist, civ7_live), key=lambda r: r[0])
-    civ6_series = sorted(merge(civ6_hist, civ6_live), key=lambda r: r[0])
-    civ7_local = to_local(civ7_live, tz)  # heatmap + stats: live only
-
+def heatmap_z(local):
     buckets: dict[tuple[int, int], list[int]] = {}
-    for ts, c in civ7_local:
+    for ts, c in local:
         buckets.setdefault((ts.weekday(), ts.hour), []).append(c)
     z = [[None] * 24 for _ in range(7)]
     for (wd, hr), vals in buckets.items():
         z[wd][hr] = round(mean(vals))
+    return z
+
+
+def build_payload(civ7_live, civ6_live, civ7_hist, civ6_hist):
+    tz = ZoneInfo(DISPLAY_TZ)
+    civ7_series = [r for r in sorted(merge(civ7_hist, civ7_live), key=lambda r: r[0]) if r[0] >= START_DATE]
+    civ6_series = [r for r in sorted(merge(civ6_hist, civ6_live), key=lambda r: r[0]) if r[0] >= START_DATE]
+    civ7_local = to_local(civ7_live, tz)  # heatmap + stats: live only
+    civ6_local = to_local(civ6_live, tz)
 
     return {
         "civ7": series_payload(to_local(civ7_series, tz)),
         "civ6": series_payload(to_local(civ6_series, tz)),
-        "heatmap": {"z": z, "weekdays": WEEKDAYS, "hours": list(range(24))},
+        "heatmap_civ7": {"z": heatmap_z(civ7_local), "weekdays": WEEKDAYS, "hours": list(range(24))},
+        "heatmap_civ6": {"z": heatmap_z(civ6_local), "weekdays": WEEKDAYS, "hours": list(range(24))},
         "stats": compute_stats(civ7_local),
         "tz": DISPLAY_TZ,
         "generated": datetime.now(tz).replace(microsecond=0).isoformat(),
@@ -151,7 +157,8 @@ def render_html(payload) -> str:
 </header>
 <div id="cards" class="cards"></div>
 <div class="chart"><div id="timeseries"></div></div>
-<div class="chart"><div id="heatmap"></div></div>
+<div class="chart"><div id="heatmap_civ7"></div></div>
+<div class="chart"><div id="heatmap_civ6"></div></div>
 <script>
 const DATA = {data_json};
 
@@ -190,13 +197,13 @@ if (!s.samples) {{
 
   const traces = [{{
     x: DATA.civ7.x, y: DATA.civ7.y, type: 'scatter', mode: 'lines',
-    line: {{ color: '#4da3ff', width: 2 }}, fill: 'tozeroy',
-    fillcolor: 'rgba(77,163,255,0.12)', name: 'Civ VII',
+    line: {{ color: '#ff9f4d', width: 2 }}, fill: 'tozeroy',
+    fillcolor: 'rgba(255,159,77,0.12)', name: 'Civ VII',
   }}];
   if (DATA.civ6.x.length) {{
     traces.push({{
       x: DATA.civ6.x, y: DATA.civ6.y, type: 'scatter', mode: 'lines',
-      line: {{ color: '#ff9f4d', width: 2, dash: 'solid' }}, name: 'Civ VI',
+      line: {{ color: '#4da3ff', width: 2 }}, name: 'Civ VI',
     }});
   }}
   Plotly.newPlot('timeseries', traces, Object.assign({{}}, layoutBase, {{
@@ -207,16 +214,26 @@ if (!s.samples) {{
     legend: {{ orientation: 'h', y: 1.08, x: 0 }},
   }}), noZoomConfig);
 
-  Plotly.newPlot('heatmap', [{{
-    z: DATA.heatmap.z, x: DATA.heatmap.hours, y: DATA.heatmap.weekdays,
-    type: 'heatmap', colorscale: 'YlOrRd', hoverongaps: false,
-    colorbar: {{ title: 'Avg players' }},
-    hovertemplate: '%{{y}} %{{x}}:00<br>avg %{{z:,}} players<extra></extra>',
-  }}], Object.assign({{}}, layoutBase, {{
-    title: 'Weekly hotspots (Civ VII, average by day &amp; hour)',
-    xaxis: Object.assign({{ title: 'Hour of day', dtick: 2, gridcolor: '#222' }}, fixedAxis),
-    yaxis: Object.assign({{ title: '', autorange: 'reversed' }}, fixedAxis),
-  }}), noZoomConfig);
+  function drawHeatmap(divId, hm, colorscale, title) {{
+    const hasData = hm.z.some(row => row.some(v => v != null));
+    if (!hasData) {{
+      document.getElementById(divId).innerHTML =
+        `<div class="empty" style="padding:24px 0;">${{title}} — no live samples yet (collector needs to run a few times to populate).</div>`;
+      return;
+    }}
+    Plotly.newPlot(divId, [{{
+      z: hm.z, x: hm.hours, y: hm.weekdays,
+      type: 'heatmap', colorscale: colorscale, hoverongaps: false,
+      colorbar: {{ title: 'Avg players' }},
+      hovertemplate: '%{{y}} %{{x}}:00<br>avg %{{z:,}} players<extra></extra>',
+    }}], Object.assign({{}}, layoutBase, {{
+      title: title,
+      xaxis: Object.assign({{ title: 'Hour of day', dtick: 2, gridcolor: '#222' }}, fixedAxis),
+      yaxis: Object.assign({{ title: '', autorange: 'reversed' }}, fixedAxis),
+    }}), noZoomConfig);
+  }}
+  drawHeatmap('heatmap_civ7', DATA.heatmap_civ7, 'YlOrRd', 'Weekly hotspots — Civ VII (average by day &amp; hour)');
+  drawHeatmap('heatmap_civ6', DATA.heatmap_civ6, 'Blues',  'Weekly hotspots — Civ VI (average by day &amp; hour)');
 }}
 </script>
 </body>
