@@ -125,11 +125,14 @@ def compute_comparison(local):
     for wd in range(7):
         cv = [c for ts, c in cur if ts.weekday() == wd]
         pv = [c for ts, c in prev if ts.weekday() == wd]
-        cur_v = round(mean(cv)) if cv else None
-        prev_v = round(mean(pv)) if pv else None
+        d_cur_avg = round(mean(cv)) if cv else None
+        d_prev_avg = round(mean(pv)) if pv else None
+        d_cur_peak = max(cv) if cv else None
+        d_prev_peak = max(pv) if pv else None
         by_weekday.append({
             "weekday": WEEKDAYS[wd],
-            "cur": cur_v, "prev": prev_v, "pct": _pct(cur_v, prev_v),
+            "cur_avg": d_cur_avg, "prev_avg": d_prev_avg, "avg_pct": _pct(d_cur_avg, d_prev_avg),
+            "cur_peak": d_cur_peak, "prev_peak": d_prev_peak, "peak_pct": _pct(d_cur_peak, d_prev_peak),
         })
 
     return {
@@ -253,10 +256,12 @@ def render_html(payload) -> str:
   .section {{ padding: 4px 24px 16px; }}
   .section h2 {{ font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:#8a93a2; margin:8px 0 10px; font-weight:600; }}
   .section .window {{ font-size:12px; color:#8a93a2; margin-bottom:12px; }}
-  table.weekday {{ border-collapse:collapse; width:100%; max-width:560px; background:#1a212c; border:1px solid #2a2f3a; border-radius:10px; overflow:hidden; }}
+  table.weekday {{ border-collapse:collapse; width:100%; max-width:820px; background:#1a212c; border:1px solid #2a2f3a; border-radius:10px; overflow:hidden; }}
   table.weekday th, table.weekday td {{ padding:8px 12px; text-align:right; border-bottom:1px solid #2a2f3a; font-size:13px; }}
   table.weekday th {{ background:#141a23; color:#8a93a2; font-weight:600; text-transform:uppercase; font-size:11px; letter-spacing:.04em; }}
+  table.weekday thead tr:first-child th {{ border-bottom:1px solid #2a2f3a; }}
   table.weekday th:first-child, table.weekday td:first-child {{ text-align:left; }}
+  table.weekday .group-edge {{ border-left:1px solid #2a2f3a; }}
   table.weekday tr:last-child td {{ border-bottom:none; }}
   .chart {{ padding: 8px 24px 24px; }}
   .empty {{ padding:40px 24px; color:#8a93a2; }}
@@ -393,16 +398,28 @@ if (!s.samples) {{
 
   const wd = (cmp && cmp.by_weekday) || [];
   const wdEl = document.getElementById('weekday');
-  if (wd.length && wd.some(r => r.cur != null || r.prev != null)) {{
+  if (wd.length && wd.some(r => r.cur_peak != null || r.prev_peak != null)) {{
     const rows = wd.map(r =>
-      `<tr><td>${{r.weekday}}</td><td>${{fmt(r.cur)}}</td><td>${{fmt(r.prev)}}</td>${{deltaCell(r.pct)}}</tr>`
+      `<tr><td>${{r.weekday}}</td>` +
+        `<td class="group-edge">${{fmt(r.cur_peak)}}</td>` +
+        `<td>${{fmt(r.prev_peak)}}</td>` +
+        `${{deltaCell(r.peak_pct)}}` +
+        `<td class="group-edge">${{fmt(r.cur_avg)}}</td>` +
+        `<td>${{fmt(r.prev_avg)}}</td>` +
+        `${{deltaCell(r.avg_pct)}}</tr>`
     ).join('');
     wdEl.innerHTML =
       `<h2>Same-day comparison — Civ VII</h2>` +
-      `<div class="window">avg concurrent players, this week's <em>day</em> vs last week's same day</div>` +
-      `<table class="weekday"><thead><tr>` +
-        `<th>Day</th><th>This week</th><th>Last week</th><th>Δ</th>` +
-      `</tr></thead><tbody>${{rows}}</tbody></table>`;
+      `<div class="window">This week's day vs last week's same day. ` +
+        `<strong>Peak</strong> = max concurrent that day (matches the bright cells in the heatmap). ` +
+        `<strong>Avg</strong> = 24-hour daily mean (gets pulled down by overnight hours).</div>` +
+      `<table class="weekday"><thead>` +
+        `<tr><th rowspan="2">Day</th>` +
+            `<th class="group-edge" colspan="3">Daily peak</th>` +
+            `<th class="group-edge" colspan="3">Daily avg</th></tr>` +
+        `<tr><th class="group-edge">This week</th><th>Last week</th><th>Δ</th>` +
+            `<th class="group-edge">This week</th><th>Last week</th><th>Δ</th></tr>` +
+      `</thead><tbody>${{rows}}</tbody></table>`;
   }}
 
   const profiles = DATA.weekly_profiles || [];
